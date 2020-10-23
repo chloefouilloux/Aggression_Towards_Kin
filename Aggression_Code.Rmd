@@ -1,0 +1,302 @@
+---
+title: "Aggression and Latency Code"
+date: "8/26/2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+First, let's load some packages!
+
+```{r}
+#First, let's load some packages
+library(ggplot2)
+library(glmmTMB)
+library(tidyr)
+library(dplyr)
+library(survival)
+library(coxme) #cox mixed effect models
+library(survminer)
+library(AICcmodavg)
+
+#for kind of cool output tables
+library(sjPlot)
+
+##optimizers
+library(DHARMa)
+```
+
+Nice. Next, let's load up that code.
+#LOAD IN THE DATA
+```{r}
+agg<- read.csv("aggression_data_20.csv", header = T)
+
+table((agg$Relatedness))#good, looks like everyone is here! 30 tadpoles per treatment, meaning 15 trials (because of tadpoles were in pairs)
+
+```
+Now let's clean up that data. Make it nice and tidy (ha!)
+#AGGRESSION TIDY DATA
+```{r}
+agg<- agg %>% 
+  group_by(Pair_ID, Relatedness) %>%
+  mutate(mass_diff = max(Mass)- min(Mass),
+         totalagg = (Bite_Num)+ (Chase_Num)) #this takes difference in weight between the pair, but keep it positive for each individual 
+
+ ## Adding total aggressive behaviors for each individual tadpole
+agg$BiteYN<- ifelse(agg$Bite== "Yes", 1, 0) 
+
+##Let's compare different degrees of relatedness to Non-Sibs
+levels(agg$Relatedness)
+agg$Relatedness<- relevel(agg$Relatedness, "Nonsibs")
+levels(agg$Relatedness)
+
+##Let's make small our intercept here.
+levels(agg$Size)
+agg$Size<- relevel(agg$Size, "Small")
+levels(agg$Size)
+```
+
+Great! Well, let's just jump into some plotting, shall we? This plot is to visualize aggression in response to size/mass difference.
+
+#AGGRESSION GRAPH
+```{r}
+############### ULTIMATE = Relative size diff, experimental mass diff. agg.
+#Lutz----
+lutz<- ggplot(agg, aes(x = mass_diff, y = totalagg, color= Size))+ 
+  geom_point(size = 3.5, alpha = 0.5)+
+  facet_wrap(~ Relatedness)+
+  stat_smooth(method = "glm", 
+              formula = y ~ log(x), 
+              fullrange = F ,
+              se = F)+
+  xlab("Mass difference between tadpoles (g)")+
+  ylab("Number of aggressive behaviors by tadpole (count)")+
+  theme_bw()+
+  theme(legend.position = "top",
+        strip.background = element_rect(
+          color="black", fill="white", size=0.5, linetype="solid"))
+
+lutz + 
+  scale_colour_manual(name  ="Relative size",
+                      values = c("#2e72e8", "#fd9087"))+
+  guides(size = FALSE)
+
+```
+Cute. I love that plot. I think it really does a good job at. . . being a plot.
+
+Well, now let's think about out latency to aggression. Again, back to tidying the ol' data.
+#LATENCY TIDY DATA
+```{r}
+###############  Time-to- Graphical Exploration ########################
+###############################################################################
+
+#The code below subsets both the mass difference, aggression difference, and 
+#the fastest bite time exhibited between both tadpoles. 
+
+chloe<- 
+  agg %>% 
+  group_by(Pair_ID, Relatedness) %>%
+  summarise( mass_diff = max(Mass)- min(Mass), 
+             min_bite_time = min(X1_Bite_Seconds, na.rm = T),#this takes the fastest bite time
+             bite_diff = first(Bite_Num) - last(Bite_Num), 
+             #this takes the difference between bites 
+             #by large and small tadpoles, using large tadpoles as the focal individual
+             agg_diff = first(totalagg) - last(totalagg)
+  )
+
+#The family value here is that of the first biter
+chloe2 <- agg %>% 
+  select(Pair_ID, Relatedness, Size, X1_Bite_Seconds, BiteYN, Family) %>%
+  group_by(Pair_ID, Relatedness) %>%
+  filter(X1_Bite_Seconds == min(X1_Bite_Seconds, na.rm = T)) %>%
+  rename(First_Biter = Size) %>%
+  select(- X1_Bite_Seconds)
+
+
+chloe3 <- full_join(chloe, chloe2, by = c("Pair_ID", "Relatedness"))
+
+#here we assign trials where no biting occured (Inf) with 3600, which is 60 minutes.
+chloe3$noinf<-ifelse(chloe3$min_bite_time == "Inf", 3600, chloe3$min_bite_time)
+chloe3$Relatedness<-relevel(chloe3$Relatedness, "Nonsibs")
+chloe3$BiteYN<-tidyr::replace_na(chloe3$BiteYN, 0)
+
+```
+
+Great, so now let's make our super cool time-to-first bite graph!
+#LATENCY GRAPH
+```{r}
+
+#Here we keep NAs which are labeled in grey. So far my favorite.
+time1<-ggplot(chloe3, aes(x = mass_diff, y = noinf/60))+
+  geom_point(aes(color = First_Biter), alpha = 0.8, size = 4)+
+  facet_wrap(~ Relatedness)+
+  ylab("Latency to First Bite in Pair (minutes)")+
+  xlab("Difference in size (g)")+
+  ylim(0,60)+
+  stat_smooth(method="glm",
+              formula=y~log(x), 
+              se = F, 
+              fullrange = T, 
+              color = "black", 
+              linetype = "F1")+
+  theme_bw()+
+  theme(legend.position = "top",
+        strip.background = element_rect(
+          color="black", fill="white", size=0.5, linetype="solid"))
+
+time1 + 
+  scale_colour_manual(values = c("#2e72e8", "#fd9087"),
+                        na.value = "grey",
+                        name  ="First aggressor")
+```
+
+Sweetness. Now let's get our modelling on.
+#AGGRESSION MODELLING
+
+```{r}
+#MASS DIFFERENCE----
+#nbinom1 = Linear paramaterization
+#nbinom2 = Quad. paramerterization
+m1<- glmmTMB(totalagg ~ Relatedness + mass_diff +(1| Pair_ID) + (1| Family)+ offset(log(Duration)),
+                         data = agg, family = "poisson")
+
+m2<- glmmTMB(totalagg ~ Relatedness * mass_diff + (1| Pair_ID) + (1| Family)+ offset(log(Duration)), 
+           data = agg, family = "poisson")
+
+m3<- glmmTMB(totalagg ~ Relatedness * mass_diff + (1| Pair_ID) + (1| Family)+ offset(log(Duration)), 
+                            data = agg, family = nbinom1)
+
+m4<- glmmTMB(totalagg ~ Relatedness * mass_diff + (1| Pair_ID) + (1| Family)+ offset(log(Duration)), 
+             data = agg, family = nbinom2)
+
+
+#Size Categorical----
+
+m5<- glmmTMB(totalagg ~ Relatedness + Size +(1| Pair_ID) + (1| Family)+ offset(log(Duration)),
+             data = agg, family = "poisson")
+
+m6<- glmmTMB(totalagg ~ Relatedness * Size+ (1| Pair_ID) + (1| Family)+ offset(log(Duration)), 
+             data = agg, family = "poisson")
+
+m7<- glmmTMB(totalagg ~ Relatedness * Size + (1| Pair_ID) + (1| Family)+ offset(log(Duration)), 
+             data = agg, family = nbinom1)
+
+m8<- glmmTMB(totalagg ~ Relatedness * Size + (1| Pair_ID) + (1| Family)+ offset(log(Duration)), 
+             data = agg, family = nbinom2)
+
+
+#AIC MODEL SELECTION----
+aic<-AIC(m1,
+         m2, 
+         m3, 
+         m4, 
+         m5, 
+         m6, 
+         m7, 
+         m8
+         ) 
+aic[order(aic$AIC),] 
+
+#AIC SUMMARY TABLE----
+aic.cand<- list(m1,
+                 m2, 
+                 m3, 
+                 m4, 
+                 m5, 
+                 m6, 
+                 m7, 
+                 m8)
+
+Cand.names <- c( "m1","m2", 
+                 "m3", "m4", 
+                 "m5", "m6", 
+                 "m7", "m8")
+
+
+aictab(aic.cand, Cand.names, sort = T)
+
+#Summary----
+summary(m7)
+#Dharma Residual Analysis
+testDispersion(m7)
+
+#Residual diagnostics are good.
+
+res <- simulateResiduals(m7, plot = T)
+par(mfrow = c(1,3))
+plotResiduals(res, agg$Relatedness)
+testDispersion(res) #model not underdispersed
+testZeroInflation(res) #model not zero inflated
+
+#TAB MODEL----
+tab_model(m7,transform = NULL,
+          show.stat = T,
+          show.obs = F, 
+          show.r2 = F, 
+          show.ngroups = F ,
+          show.icc = F,
+          string.stat = "z",
+          string.est = "Estimate",
+          pred.labels = c("(Intercept)", "Halfsiblings", "Siblings",
+                          "Size (Large)", "Halfsiblings: Size (Large)", 
+                          "Siblings: Size (Large)"),
+          dv.labels = "Total aggression")
+
+library(insight)
+get_variance(m7)
+
+```
+So m7 is our magic number. Let's do a little model deep dive, to see what these numbers really mean.
+
+```{r}
+summary(m7)
+
+alpha<- coef(summary(m7))$cond['(Intercept)', "Estimate"] #small nonsibs
+betalarge<- coef(summary(m7))$cond['SizeLarge', "Estimate"]
+betasibs<- coef(summary(m7))$cond['RelatednessSibs', "Estimate"]
+betasibslarge<- coef(summary(m7))$cond['RelatednessSibs:SizeLarge', "Estimate"]
+betahalflarge<-coef(summary(m7))$cond['RelatednessHalfsibs:SizeLarge', "Estimate"]
+betahalf<- coef(summary(m7))$cond['RelatednessHalfsibs', "Estimate"]
+
+#Small nonsiblings
+exp(alpha)
+
+nonsibscat<- exp(alpha)*exp(betalarge) #Large nonsiblings
+nonsibscat #0.00148
+
+largesibscat<- exp(alpha)*exp(betasibs)*exp(betalarge)*exp(betasibslarge)
+largesibscat #0.0009499
+
+nonsibscat/largesibscat #large nonsibs bite twice as much as large sibs
+
+```
+
+
+#TIME TO MODEL DESIGN
+With time-to data using cox models are without question the most fit to address the data, so let's just go work with that!°
+
+```{r}
+#because subsetted data, does Pair_ID disappear
+coxmix1<- coxme(Surv(noinf, BiteYN) ~ Relatedness * mass_diff
+               + (1 |Family), data = chloe3)
+summary(coxmix1)
+
+tab_model(coxmix1,
+          transform = NULL,
+          show.stat = T,
+          show.obs = F,
+          show.ngroups = F,
+          string.stat = "z",
+          string.est = "Estimate",
+          pred.labels = c("Halfsiblings", 
+                          "Siblings",
+                          "Mass_Diff", 
+                          "Halfsiblings: Mass_Diff", 
+                          "Siblings: Mass_Diff"),
+          dv.labels = "Latency to first bite")
+
+```
+
