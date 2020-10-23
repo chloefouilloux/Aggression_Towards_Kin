@@ -12,4 +12,4 @@ B. AGGRESSION. RMD
    This markdown file includes all graphing/modeling of aggression of tadpoles during experimental periods.
    
 ETHICS STATEMENT:
-All animals used in this experiment were healthy (assessed to the best of our abilities) and maintained in the most naturally-mimicing conditions possible in a laboratory setting. Aggression trials were ended prematurely if ever levels rose to a point of inflicting permanent damage. We acknowledge here that working with animals is a privilege, and we do no take our responsibility to their welfare lightly. 
+All animals used in this experiment were healthy (assessed to the best of our abilities) and maintained in the most naturally-occuring conditions possible in a laboratory setting. Aggression trials were ended prematurely if ever levels rose to a point of inflicting permanent damage. We acknowledge here that working with animals is a privilege, and we do no take our responsibility to their welfare lightly. 
