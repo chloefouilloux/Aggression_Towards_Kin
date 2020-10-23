@@ -1,0 +1,279 @@
+---
+title: "Activity_Code"
+date: "8/27/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Hello! In this markdown, we're going to play with the activity data. Let's jump right in.
+
+First, let's load some packages
+```{r}
+#Activity levels
+
+#First, let's load some packages
+library(ggplot2)
+library(glmmTMB)
+library(gridExtra)
+library(tidyr)
+library(dplyr)
+library(AICcmodavg)
+
+#for kind of cool output tables
+library(sjPlot)
+library(DHARMa)
+library(insight)
+
+```
+Let's load some data!
+
+These files are divided into preactivity (10 minute period post-acclimation) and post activity (60 minute experiment)
+
+```{r}
+pre_activity_sums<- read.csv("pre_activity_sums.csv", header = T, sep = ",")
+post_activity_sums<- read.csv("post_activity_sums.csv", header = T, sep = ",")
+
+#Releveling the data
+#Relevel----
+levels(pre_activity_sums$Relatedness)
+pre_activity_sums$Relatedness<- factor(pre_activity_sums$Relatedness, levels = c("Nonsibs", "Halfsibs", "Sibs"))
+
+levels(pre_activity_sums$Size)
+pre_activity_sums$Size<- relevel(pre_activity_sums$Size, "Small")
+
+levels(post_activity_sums$Relatedness)
+post_activity_sums$Relatedness<- factor(post_activity_sums$Relatedness, levels = c("Nonsibs", "Halfsibs", "Sibs"))
+post_activity_sums$Size<- relevel(post_activity_sums$Size, "Small")
+```
+
+#GRAPHICAL EXPLORATION
+Now that we've got out data all tidyed up, let's go ahead and look at that sweet sweet ggplot style. I'm thinking boxplots are the way to go here. 
+
+```{r}
+#Pre Activity
+
+ggplot(pre_activity_sums, aes( x = Relatedness, y = Swim, color = Size)) + 
+  geom_boxplot()+
+  geom_point(position=position_jitterdodge(), alpha = 0.3)+
+  ylab("Acclimation Swimming Activity (count)")+
+  ylim(0, 100)+ 
+  theme_bw()+
+  theme(legend.position = "none")+
+  scale_colour_manual(name  ="Relative size",
+                      values = c("#2e72e8", "#fd9087"))+
+  geom_segment(aes(x=1.1, xend=1.9, y=15, yend=15), color = "black") + 
+  geom_segment(aes(x=2.3, xend=3.1, y=15, yend=15), color = "black") + 
+  annotate("text",
+           x = c(1.45, 2.7),
+           y = c(17, 18),
+           label = c("***", "ns"),
+           family = "", fontface = 3, size=4)+
+           labs(tag = "A")
+
+
+#Post Activity
+ggplot(post_activity_sums, aes( x = Relatedness, y = Swim, color = Size)) + 
+  geom_boxplot()+
+  geom_point(position=position_jitterdodge(), alpha = 0.3)+
+  ylab("Experimental Swimming Activity (count)")+
+  ylim(0, 100)+ 
+  theme_bw()+
+  theme(legend.position = "none")+
+  scale_colour_manual(name  ="Relative size",
+                      values = c("#2e72e8", "#fd9087"))+
+  annotate("text", x = c("Sibs", "Halfsibs", "Nonsibs"), 
+           y = 75, label = "* * *") + 
+  labs(tag = "B")
+
+```
+```{r}
+#Post Activity
+
+ggplot(post_activity_sums, 
+          aes( x = Relatedness, y = Swim, color = Size))+ 
+  geom_boxplot()+
+  geom_point(position=position_jitterdodge(), alpha = 0.3)+
+  ylab("Experimental Swimming Activity (count)")+
+  ylim(0, 100)+ 
+  theme_bw()
+
+ggplot(post_activity_sums, 
+          aes( x = Relatedness, y = Swim, color = Size))+ 
+  geom_boxplot()+
+  geom_point(position=position_jitterdodge(), alpha = 0.3)+
+  ylab("Experimental Swimming Activity (count)")+
+  ylim(0, 100)+
+  theme_bw()
+
+
+```
+
+#MODELLING AND MODEL SELECTION
+#PRE ACTIVITY
+```{r}
+#PRE ACTIVITY SWIMMING----
+#nbinom1 = Linear paramaterization
+#nbinom2 = Quad. paramerterization
+m1<- glmmTMB(Swim ~ Relatedness * Size + (1| Pair_ID) + (1| Family), 
+              data = pre_activity_sums, family = "poisson")
+
+m2<- glmmTMB(Swim ~ Relatedness + Size + (1| Pair_ID) + (1| Family), 
+                   data = pre_activity_sums, family = "poisson")
+
+m3<- glmmTMB(Swim ~ Relatedness * Size + (1| Pair_ID) + (1| Family), 
+                    data = pre_activity_sums, family = nbinom1)
+
+m4<- glmmTMB(Swim ~ Relatedness + Size + (1| Pair_ID) + (1| Family), 
+             data = pre_activity_sums, family = nbinom1)
+
+m5<- glmmTMB(Swim ~ Relatedness + Size + (1| Pair_ID) + (1| Family), 
+                          data = pre_activity_sums, family = nbinom2)
+
+m6<- glmmTMB(Swim ~ Relatedness * Size + (1| Pair_ID) + (1| Family), 
+             data = pre_activity_sums, family = nbinom2)
+#AIC PRE----
+aic<-AIC(m1, m2, m3,m4, m5, m6)
+
+aic[order(aic$AIC),] 
+
+aic.cand<- list(m1,
+                m2, 
+                m3, 
+                m4, 
+                m5, 
+                m6)
+
+Cand.names <- c( "m1","m2", 
+                 "m3", "m4", "m5", "m6")
+
+aictab(aic.cand, Cand.names, sort = T)
+
+```
+Looks like M4 is the big winner here. Let's look more into it.
+
+```{r}
+#Summary----
+#Always take the interaction
+summary(m4) #halfsibs diff from nonsibs
+
+#Dharma Residual Analysis
+testDispersion(m4)
+simulationOutput <- simulateResiduals(fittedModel = m4, plot = T)
+
+#how about sibs? Must relevel.
+pre_activity_sums$Relatedness_Half<- factor(pre_activity_sums$Relatedness, levels = c("Halfsibs", "Sibs","Nonsibs"))
+levels(pre_activity_sums$Relatedness_Half)
+###
+m4a<- glmmTMB(Swim ~ Relatedness_Half + Size + (1| Pair_ID) + (1| Family), 
+             data = pre_activity_sums, family = nbinom1)
+
+tab_model(m4,
+          transform = NULL,
+          show.stat = T,
+          show.obs = F, 
+          show.r2 = F, 
+          show.ngroups = F ,
+          show.icc = F,
+          show.zeroinf = F,
+          string.stat = "z",
+          string.est = "Estimate",
+          pred.labels = c("(Intercept)", "Siblings",
+                          "Nonsiblings",
+                          "Size (Large)"),
+          dv.labels = "Post-acclimation Activity")
+
+get_variance(m4)
+
+```
+
+#MODEL SELECTION
+#POST ACTIVITY
+Remember here, there are different trial lengths (3 of 45 ended early due to aggrression levels) so we have to take that into account.
+```{r}
+###############################################
+#POST ACTIVITY-
+#DON'T FORGET OFFSET.'
+
+m7<- glmmTMB(Swim ~ Relatedness * Size + (1| Pair_ID) + (1| Family) + offset(log(Duration)), 
+             data = post_activity_sums, family = "poisson")
+
+m8<- glmmTMB(Swim ~ Relatedness + Size + (1| Pair_ID) + (1| Family) + offset(log(Duration)), 
+             data = post_activity_sums, family = "poisson")
+
+m9<- glmmTMB(Swim ~ Relatedness * Size + (1| Pair_ID) + (1| Family) + offset(log(Duration)), 
+             data = post_activity_sums, family = nbinom1, zi = ~1)
+
+m10<- glmmTMB(Swim ~ Relatedness + Size + (1| Pair_ID) + (1| Family) + offset(log(Duration)), 
+               data = post_activity_sums, family = nbinom1, zi = ~1)
+
+
+m11<- glmmTMB(Swim ~ Relatedness + Size + (1| Pair_ID) + (1| Family) + offset(log(Duration)), 
+             data = post_activity_sums, family = nbinom2, zi = ~1)
+
+m12<- glmmTMB(Swim ~ Relatedness * Size + (1| Pair_ID) + (1| Family) + offset(log(Duration)), 
+             data = post_activity_sums, family = nbinom2, zi = ~1)
+
+
+#AIC MODEL SELECTION----
+aic<-AIC(m7, m8, m9, m10, m11, m12)
+
+aic[order(aic$AIC),] 
+
+#AIC SUMMARY TABLE----
+aic.cand<- list(m7, m8, m9, m10, m11, m12)
+
+Cand.names <- c("m7", "m8", "m9", "m10", "m11", "m12")
+
+
+aictab(aic.cand, Cand.names, sort = T)
+```
+
+Looks like m10 is the big winner here. Let's look more into it.
+
+```{r}
+#Summary----
+summary(m10)
+testDispersion(m10)
+simulationOutput <- simulateResiduals(fittedModel = m10, plot = T)
+#So we have a small issue iwth quantile deviations here. Let's see
+#what we can do.
+#This issue seems to have resolved when I take into account dispersion of Size
+m10a<- glmmTMB(Swim ~ Relatedness + Size + (1| Pair_ID) + (1| Family) + offset(log(Duration)), 
+               data = post_activity_sums, family = nbinom1, dispformula = ~ Size)
+
+testDispersion(m10a)
+simulationOutput <- simulateResiduals(fittedModel = m10a, plot = T) #Yay! No more issues.
+
+res <- simulateResiduals(m10a, plot = T)
+par(mfrow = c(1,3))
+plotResiduals(res, post_activity_sums$Relatedness)
+testDispersion(res) #model not underdispersed
+
+
+#TAB MODEL----
+tab_model(m10a,
+          show.stat = T,
+          show.obs = F, 
+          show.r2 = F, 
+          show.re.var = T,
+          show.ngroups = F ,
+          show.icc = F,
+          show.zeroinf = F,
+          string.stat = "z",
+          string.est = "Estimate",
+          pred.labels = c("(Intercept)", "Halfsiblings", "Siblings",
+                          "Size (Large)"),
+          dv.labels = "Experimental Activity")
+
+get_variance(m10a) #used for table output because of glmmTMB corrections
+
+```
+
+
+
+
+
+
